@@ -68,13 +68,15 @@ export default suite("vanilla", {
 
       isRunning = true
       getBlockTime(hash)
-        .then((blockTime) => ({
-          hash,
-          blockTime,
-          blockNumber: getBlockNumber(hash),
-        }))
-        .then((x) => {
+        .then((blockTime) => {
           isRunning = false
+          return {
+            hash,
+            blockTime,
+            blockNumber: getBlockNumber(hash),
+          }
+        })
+        .then((x) => {
           output(x)
           if (!isListening) {
             output(null)
