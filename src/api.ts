@@ -63,7 +63,7 @@ const startEmitting = () => {
   })
 
   if (currentTimeIdx !== times.size - 1) {
-    setTimeout(startEmitting, 0)
+    Promise.resolve().then(startEmitting)
   }
 }
 
@@ -76,7 +76,9 @@ const addUnsubscription = (name: string) => {
 
 const listenToHashes: CallbackCreator<string> = (listener) => {
   hashListeners.add(listener)
-  if (currentTimeIdx === -1) startEmitting()
+  if (currentTimeIdx === -1) {
+    startEmitting()
+  }
 
   return () => {
     hashListeners.delete(listener)
@@ -97,12 +99,13 @@ const getBlockTime = (hash: string, signal?: AbortSignal): Promise<number> =>
     }
 
     const onAbort = () => {
+      signal?.removeEventListener("abort", onAbort)
       addUnsubscription(hash)
       blockTimeListeners.delete(hash)
       rej(new Error("aborted"))
     }
 
-    signal?.addEventListener("abort", onAbort, { once: true })
+    signal?.addEventListener("abort", onAbort)
 
     if (blockTimeListeners.has(hash)) {
       return rej(new Error(`Duplicated getBlockTime(${hash})`))
@@ -137,8 +140,40 @@ export const suite = (suite: string, tests: Partial<Tests>) => () =>
       const expectedValues = allExpectedValues[name as "allInOrder"]
       const expectedCancelations = allExpectedCancelations[name as "allInOrder"]
 
+      const evaluateOutputs = () => {
+        const receivedValues = values.join(" ")
+
+        if (receivedValues !== expectedValues) {
+          console.error(`${suite}-${name}: did not emmit the correct values`)
+          console.log(`expected: ${expectedValues}`)
+          console.log(`received: ${receivedValues}`)
+          process.exit(1)
+        }
+
+        const receivedCancelations = Object.entries(unsubscriptions)
+          .map(([time, keys]) => `${time}-${keys.sort().join("-")}`)
+          .join(" ")
+
+        if (receivedCancelations !== expectedCancelations) {
+          console.error(
+            `${suite}-${name}: did not produce the correct cancelations`,
+          )
+          console.log(`expected: ${expectedCancelations}`)
+          console.log(`received: ${receivedCancelations}`)
+          process.exit(1)
+        }
+      }
+
       const values: Array<string> = []
-      return () =>
+      return () => {
+        const timeoutToken = setTimeout(() => {
+          console.error(`${suite}-${name}: did not complete in time`)
+          evaluateOutputs()
+          process.exit(1)
+        }, 1_000)
+
+        unsubscriptions = {}
+        currentTimeIdx = -1
         fn({
           listenToHashes,
           getBlockNumber,
@@ -149,42 +184,20 @@ export const suite = (suite: string, tests: Partial<Tests>) => () =>
               return values.push(`${hash}-${blockTime}-${blockNumber}`)
             }
 
-            const receivedValues = values.join(" ")
-
-            if (receivedValues !== expectedValues) {
-              console.error(
-                `${suite}-${name}: did not emmit the correct values`,
-              )
-              console.log(`expected: ${expectedValues}`)
-              console.log(`received: ${receivedValues}`)
-              process.exit(1)
-            }
-
-            const receivedCancelations = Object.entries(unsubscriptions)
-              .map(([time, keys]) => `${time}-${keys.sort().join("-")}`)
-              .join(" ")
-            unsubscriptions = {}
-            currentTimeIdx = -1
-
-            if (receivedCancelations !== expectedCancelations) {
-              console.error(
-                `${suite}-${name}: did not produce the correct cancelations`,
-              )
-              console.log(`expected: ${expectedCancelations}`)
-              console.log(`received: ${receivedCancelations}`)
-              process.exit(1)
-            }
-
+            clearTimeout(timeoutToken)
+            evaluateOutputs()
             console.log(`${suite}-${name} passes the tests!`)
 
             if (functions.length === 0) {
               res()
               return
             }
-            functions.shift()!()
+
+            setTimeout(functions.shift()!, 0)
           },
         })
+      }
     })
 
-    functions.shift()!()
+    setTimeout(functions.shift()!, 0)
   })
